@@ -1,377 +1,408 @@
-<?php
+Ext.define('kDesktop.orderimport.main', {
+	extend: 'Ext.panel.Panel',
+	constructor: function(config) {
+		config = config || {};
+		
+		this.ownerModule = config.ownerModule;
+		this.parent = config.parent;
+		
+		this.uid = 'orderimport-main';
+		this.title = 'Импорт выписок';
+		this.closable = false;
 
-header("last-modified: ".gmdate("d, d m y h:i:s")." gmt");
-header("Cache-Control: no-store, no-cache, must-revalidate");
-header("Cache-Control: post-check=0, pre-check=0", false);
-header("pragma: no-cache");
-
-include("../../inc/init.php");
-include("../../inc/_app.php");
-
-$app = new app();
-$db = $app->connect();
-
-/*
-{
-	"auth": "hash",
-	"sales": [
-		{
-			"id": 1,
-			"type": "IN",
-			"num": "123",
-			"date": "09.10.2023",
-			"payorder_num": "15",
-			"payorder_date": "27.02.2024",
-			"client_inn": "",
-			"client_kpp": "",
-			"client_name": "Meridian (Меридиан) ТОО, заказчик",
-			"currency": "978",
-			"amount": 1075000
-		},
-		{
-			"id": 2,
-			"type": "IN",
-			"num": "0301-000002",
-			"date": "01.03.2024",
-			"payorder_num": "15",
-			"payorder_date": "27.02.2024",
-			"client_inn": "",
-			"client_kpp": "",
-			"client_name": "Meridian (Меридиан) ТОО, заказчик",
-			"currency": "398",
-			"amount": 1075000
-		}
-	]
-}
-
-{
-	"auth": "hash",
-	"sales": [
-		{
-			"id": 1,
-			"type": "OUT",
-			"payorder_num": "123",
-			"payorder_date": "09.10.2023",
-			"client_inn": "0122909098",
-			"client_kpp": "",
-			"client_name": "ЭКИП ООО",
-			"currency": "643",
-			"amount": 18000,
-			"num": "612 от 21.02.2024"
-		},
-		{
-			"id": 1,
-			"type": "OUT",
-			"num": "296487С от 21.02.2024, 296746С от 23.02.2024",
-			"payorder_num": "777",
-			"payorder_date": "01.03.2024",
-			"client_inn": "7715943550",
-			"client_kpp": "771501001",
-			"client_name": "Первый элемент, ООО",
-			"currency": "643",
-			"amount": 400000
-		}
-	]
-}
-*/
-
-$currencyMap = array(
-	'840' => 'USD',
-	'978' => 'EUR',
-	'398' => 'KZT',
-	'643' => 'RUR',
-	'156' => 'CNY',
-	'860' => 'UZS'
-);
-$data = json_decode($_REQUEST['data'], true);
-if (sizeof($data)) {
-	ini_set("max_execution_time", "0");
-	
-	if (strlen($data['auth']) && ($data['auth'] == Config::API_1C_AUTH_TOKEN)) {
-		if (!sizeof($data['sales'])) {
-			echo json_encode(array(
-				'success' => false,
-				'code' => -4,
-				'msg' => 'Ошибка данных'
-			));
-		}
-		else {
-			$sales = array();
-			foreach($data['sales'] AS $bill) {
-				try {
-					$db->StartTransaction();
+		this.selected = null;
+		this.scroll = 0;
+		this.currentPage = 0;
+		this.store = Ext.create('Ext.data.Store', {
+			pageSize: 100,
+			root: 'items',
+			idProperty: 'id',
+			remoteSort: true,
+			autoLoad: true,
+			fields: [
+				'id',
+				'rownum',
+				'tid',
+				'source',
+				'currency',
+				'currency_rate',
+				'invalue',
+				'outvalue',
+				'inouttype',
+				'inoutstr',
+				'contragent',
+				'contr_inn',
+				'contr_name',
+				'billnum',
+				'billtid',
+				'payorderdate_str',
+				'ordersns',
+				'tms_contr_out',
+				'tms_contr_in',
+				'tms_contr_in_sum',
+				'tms_contr_in_currency',
+				'tms_contr_in_currency_rate',
 				
-					$type = $bill['type'];
-					$bill['currency'] = $currencyMap[ $bill['currency'] ];
-					
-					if ($type == 'IN') {
-						$db->Query(sprintf("
-							SELECT
-							t.id,
-							t.multimodal,
-							t.multimodal_id,
-							t.multimodal_num,
+				'tms_contr_out_sum',
+				'tms_contr_out_currency',
+				'tms_contr_out_currency_rate',
+				{name: 'status', type: 'int'},
 
-							t.client_currency_rate as currency_rate,
-							t.client_currency_sum as sum,
-							t.client_currency_total as total,
-							t.cargoinsuranceclientvalue as cargo_insurance_client,
-							t.client_currency as currency,
-							cc.paytype as paytype,
-							
-							c.inn,
-							c.name
-							
-							FROM transportation t
-							left outer join contract cc on (t.clientcontract = cc.id)
-							left outer join client c on (t.client = c.id)
-							WHERE (t.clientinvoicedate = to_timestamp('%s', 'DD.MM.YYYY')) and (t.clientinvoice = '%s')
-						", $db->Escape($bill['date']), $db->Escape($bill['num'])));
-						$transportations = $db->FetchAllAssoc();
-						
-						$billnum = sprintf("%s от %s", $bill['num'], $bill['date']);
-					} elseif ($type == 'OUT') {
-						$filtr = array();
-						$billnum = explode(",", $bill['num']);
-						if (sizeof($billnum)) foreach($billnum AS $num) {
-							$tmp = explode(" от ", $num);
-							
-							$filtr[] = sprintf("( (t.ferryinvoicedate = to_timestamp('%s', 'DD.MM.YYYY')) and (t.ferryinvoice = '%s') )", $db->Escape($tmp[1]), $db->Escape($tmp[0]));
-						}
-						
-						if (!empty($filtr)) {
-							$filtr = implode(" or ", $filtr);
-
-							$db->Query(sprintf("
-								SELECT
-								t.id,
-								t.multimodal,
-								t.multimodal_id,
-								t.multimodal_num,
-
-								t.ferry_currency_rate as currency_rate,
-								t.ferry_currency_sum as sum,
-								t.ferry_currency_total as total,
-								t.ferry_currency as currency,
-								fc.paytype as paytype,
-								
-								f.inn,
-								f.name
-								
-								FROM transportation t
-								left outer join contract fc on (t.ferrycontract = fc.id)
-								left outer join ferryman f on (t.ferryman = f.id)
-								WHERE %s
-							", $filtr));
-							$transportations = $db->FetchAllAssoc();
-						} else {
-							$transportations = array();
-						}
-						
-						$billnum = $bill['num'];
-					} else {
-						$sales[] = array(
-							'id' => (string)$bill['id'],
-							'date' => (string)$bill['date'],
-							'num' => (string)$bill['num'],
-							'type' => (string)$bill['type'],
-							'success' => false,
-							'code' => -4,
-							'msg' => 'Ошибка данных'
-						);
-						$db->RollBack();
-						continue;
-					}
-					
-					if (!empty($transportations)) {
-						$billtids = array(); // для отображения в orderimport
-						$leftPaym = array((float)$bill['amount']);
-						
-						//тепличный вариант. все совпало. возможен неправильный остаток
-						$payments = array();
-						
-						//вариант с ошибками
-						//попытаться разнести там где совпадает
-						//если в процессе какие-то ошибки, то один платеж без перевозок, в комменте номера перевозок, счет, остаток
-						$error = array();
-
-						foreach ($transportations as $t) {
-							$t = array_change_key_case($t, CASE_LOWER);
-
-							if (!(int)$t['multimodal']) {
-								$billtids[] = (int)$t['id'];
-							} else {
-								$billtids[] = sprintf("%s-%s", (int)$t['multimodal_id'], $t['multimodal_num']);
-							}
-
-							$sum = (float)$t['sum'];
-							$contractPayType = $t['paytype'];
-							$currency = ($contractPayType === 'RUR') ? 'RUR' : $t['currency'];
-							if (($currency === 'RUR') && ($t['currency'] !== 'RUR')) {
-								$sum = (float)$t['total'];
-							}
-
-							if ($type === 'IN') {
-								$cargoInsuranceClient = $t['cargo_insurance_client'] ?? 0;
-								if ($cargoInsuranceClient > 0 && $currency === 'RUR') {
-									$sum = $sum + $cargoInsuranceClient;
-								}
-							}
-
-							//если валюты не совпадают, нечего вычитать. ошибка
-							if ($currency != $bill['currency']) {
-								$error[] = $t['id'];
-								$payments[] = array(
-									'tid' => (int)$t['id'],
-									'status' => 2,
-									'sum' => 0
-								);
-								continue;
-							}
-							
-							// считаем остаток
-							$db->Query(sprintf("
-								select
-								sum(p.value) AS sum
-								from payment p
-								where (p.tid = '%s') and (p.type = '%s') and (p.currency = '%s') and (p.cash = '0')
-							", (int)$t['id'], $db->Escape($type), $db->Escape($currency)));
-							$tmp = $db->FetchRowAssoc();
-							$tmp = array_change_key_case($tmp, CASE_LOWER);
-							
-							$sum = round($sum - (float)$tmp['sum'], 2);
-							
-							// если остаток 0 пропуск
-							if ($sum <= 0) continue;
-							
-							$leftPaymInCurrency = round($leftPaym[sizeof($leftPaym)-1] - $sum, 2);
-							$leftPaym[] = $leftPaymInCurrency;
-							
-							if ($leftPaymInCurrency >= 0) {
-								$paym = array(
-									'tid' => (int)$t['id'],
-									'status' => 1,
-									'sum' => $sum,
-									'rate' => $t['currency_rate']
-								);
-							}
-							elseif ($leftPaym[sizeof($leftPaym)-2] >= 0) {
-								$paym = array(
-									'tid' => (int)$t['id'],
-									'status' => 2,
-									'sum' => $leftPaym[sizeof($leftPaym)-2],
-									'rate' => $t['currency_rate']
-								);
-							}
-							else
-								continue;
-
-							//если контрагент не совпадает, все равно сохраняем
-							if (
-								(trim($bill['client_inn']) != trim($t['inn'])) ||
-								!strlen(trim($bill['client_inn'])) ||
-								!strlen(trim($t['inn']))
-							)
-								$paym['status'] = 2;
-
-							$payments[] = $paym;
-						}
-						
-						//весь остаток в один платеж без перевозок
-						if ($leftPaym[sizeof($leftPaym)-1] > 0) {
-							$payments[] = array(
-								'tid' => 0,
-								'status' => 2,
-								'sum' => $leftPaym[sizeof($leftPaym)-1]
-							);
-						}
-						
-						//сохранение
-						if (sizeof($payments)) foreach($payments AS $paym) {
-							$query = new iQuery("orderimport");
-							$query->Param("uid",		0);
-							$query->Param("tid",		$paym['tid']);
-							$query->Param("source",		'API');
-							$query->Param("currency",	$bill['currency']);
-							$query->Param("inouttype",	$type);
-							
-							if ($type == 'IN') {
-								$query->Param("invalue",	$paym['sum']);
-							}
-							else {
-								$query->Param("outvalue",	$paym['sum']);
-							}
-							$query->Param("contr_inn",		$db->Escape($bill['client_inn']));
-							$query->Param("contr_name",		$db->Escape($bill['client_name']));
-							$query->Param("payorder",		$db->Escape($bill['payorder_num']));
-							$query->Param("payorderdate",	$db->Escape($bill['payorder_date']), "DATE");
-							$query->Param("billnum",		$db->Escape($billnum));
-							$query->Param("billtid",		$db->Escape(implode($billtids, ", ")));
-							$query->Param("status",			$paym['status']);
-							$query->Param("currency_rate",	($paym['rate'] === null) ? 'null' : $paym['rate'], 'RAW');
-							$db->Exec($query);
-						}
-
-						$sales[] = array(
-							'id' => (string)$bill['id'],
-							'date' => (string)$bill['date'],
-							'num' => (string)$bill['num'],
-							'type' => (string)$bill['type'],
-							'success' => true,
-							'code' => 0
-						);
-					}
-					else {
-						//платеж не сохрянять т.к весь остаток на последнюю идет
-						$sales[] = array(
-							'id' => (string)$bill['id'],
-							'date' => (string)$bill['date'],
-							'num' => (string)$bill['num'],
-							'type' => (string)$bill['type'],
-							'success' => false,
-							'code' => -5,
-							'msg' => 'Не найдено'
-						);
-					}
-					
-					$db->Commit();
+				{name: 'error', type: 'int'},
+				{name: 'errorCurrency', type: 'int'},
+				{name: 'errorContragent', type: 'int'},
+				{name: 'errorSum', type: 'int'}
+			],
+			proxy: {
+				actionMethods: 'POST',
+				type: 'ajax',
+				url: this.ownerModule.app.connectUrl,
+				extraParams: {
+					module: this.ownerModule.moduleId,
+					method: 'ordersGrid'
+				},
+				reader: {
+					type: 'json',
+					root: 'items',
+					totalProperty: 'totalCount'
 				}
-				catch (Exception $e) {
-					$db->RollBack();
-					
-					$sales[] = array(
-						'id' => (string)$v['id'],
-						'date' => (string)$v['date'],
-						'num' => (string)$v['num'],
-						'type' => (string)$v['type'],
-						'success' => false,
-						'code' => -3,
-						'msg' => 'Ошибка выполнения'
-					);
+			},
+			sorters: [{
+				property: 'status_text',
+				direction: 'ASC'
+			}]
+		});
+		this.store.on('beforeload', function(){
+			try {
+				this.scroll = this.grid.getView().el.dom.scrollTop;
+			} catch(e) {}
+
+		},this);
+		this.store.on('load', function() { 
+			if ( (this.store.getTotalCount() > 0) && this.grid && this.selected ) {
+				var rec = this.store.findRecord('id', this.selected.get('id'));
+				
+				try {
+					var index = rec.index - this.store.pageSize*(this.currentPage-1);
+					this.grid.getSelectionModel().select(index, true, true);
+				} catch(e) {
+					this.selected = null;
+					this.scroll = 0;
 				}
 			}
 			
-			echo json_encode(array(
-				'success' => true,
-				'code' => 0,
-				'sales' => $sales
-			));
-		}
-	}
-	else {
-		echo json_encode(array(
-			'success' => false,
-			'code' => -1,
-			'msg' => 'Ошибка авторизации'
-		));
-	}
-}
-else {
-	echo json_encode(array(
-		'success' => false,
-		'code' => -2,
-		'msg' => 'Ошибка данных'
-	));
-}
+			new Ext.util.DelayedTask(function() {
+				this.grid.setScrollTop(this.scroll);
+			}, this).delay(300);
+		},this);
+		
+		this.gridTbar = Ext.create('Ext.toolbar.Toolbar', {
+			items: [
+				{
+					text: 'Действия',
+					menu:[
+						{
+							text: 'Применить',
+							handler: function (){
+								Ext.MessageBox.confirm('Применение', 'Вы уверены что хотите применить эти платежи?',
+									function(btn){
+										if(btn == 'yes') {
+											this.ownerModule.app.doAjax({
+												module: this.ownerModule.moduleId,
+												method: 'applyAll'
+											},
+											function(res) {
+													this.store.load();
+											},
+											this, this);
+										}
+									},
+									this
+								);
+							},
+							scope: this
+						},
+						'-',
+						{
+							text: 'ОЧИСТИТЬ',
+							handler: function (){
+								Ext.MessageBox.confirm('Очистка', 'Вы уверены что хотите очистить ВСЮ таблицу?',
+									function(btn){
+										if(btn == 'yes') {
+											this.ownerModule.app.doAjax({
+												module: this.ownerModule.moduleId,
+												method: 'deleteAll'
+											},
+											function(res) {
+													this.store.load();
+											},
+											this, this);
+										}
+									},
+									this
+								);
+							},
+							scope: this
+						}
+					]
+				}
+			]
+		});
+		
+		this.gridBbar = Ext.create('Ext.toolbar.Paging', {
+			store: this.store,
+			displayInfo: true,
+			displayMsg: 'Записи {0} - {1} из {2}',
+			emptyMsg: "Нет записей"
+		});
+		this.gridBbar.on('change', function(tb, pageData, eOpts) {
+			try {
+				if (this.currentPage != pageData.currentPage) this.scroll = 0;
+			} catch(e) {
+				this.scroll = 0;
+			}
+			this.currentPage = pageData.currentPage;
+		}, this);
+		
+		this.grid = Ext.create('Ext.grid.Panel', {
+			region: 'center',
+			store: this.store,
+			loadMask: true,
+			columnLines: true,
+			columns:[
+				{
+					header: "",
+					dataIndex: 'rownum',
+					width: 50,
+					sortable: false,
+					renderer: function(value, metaData, record) {
+						if (record.get('error') == 1) metaData.style = "background-color : #ff9999 !important";
+						return value;
+					}
+				},
+				{
+					header: "",
+					dataIndex: '',
+					width: 30,
+					sortable: false,
+					align: 'center',
+					renderer: function(value, metaData, record) {
+						if (record.get('error') == 1) metaData.style = "background-color : #ff9999 !important";
+						
+						if (record.get('status') == 1)
+							return '<input type="button" class="x-form-field x-form-checkbox" style="background-position: 0 -13px;">';
+						else
+							return '';
+					}
+				},
+				{
+					header: "Номер заявки",
+					dataIndex: 'tid',
+					width: 100,
+					sortable: false
+				},
+				{
+					header: "Валюта выписки",
+					dataIndex: 'currency',
+					width: 100,
+					sortable: false,
+					renderer: function(value, metaData, record) {
+						if (record.get('errorCurrency') == 1) metaData.style = "background-color : #ff9999 !important";
+						return (value && value.length) ? value+'&nbsp;' : '&nbsp;';
+					}
+				},
+				{
+					header: "Дата ПП",
+					dataIndex: 'payorderdate_str',
+					width: 70,
+					sortable: false
+				},
+				{
+					header: "Списание",
+					dataIndex: 'outvalue',
+					width: 100,
+					sortable: false
+				},
+				{
+					header: "Поступление",
+					dataIndex: 'invalue',
+					width: 100,
+					sortable: false
+				},
+				{
+					header: "",
+					dataIndex: 'inoutstr',
+					width: 100,
+					sortable: false
+				},
+				{
+					header: "Итого",
+					dataIndex: 'ordersns',
+					width: 100,
+					sortable: false,
+					renderer: function(value, metaData, record) {
+						if (record.get('errorSum') == 1) metaData.style = "background-color : #ff9999 !important";
+						return value;
+					}
+				},
 
-?>
+				//tms
+				{
+					header: "ТМС Списание",
+					dataIndex: 'tms_contr_out_sum',
+					width: 100,
+					sortable: false
+				},
+				{
+					header: "ТМС Валюта списания",
+					dataIndex: 'tms_contr_out_currency',
+					width: 100,
+					sortable: false,
+					renderer: function(value, metaData, record) {
+						if ((record.get('inouttype') == 'OUT') && (record.get('errorCurrency') == 1)) metaData.style = "background-color : #ff9999 !important";
+						return value;
+					}
+				},
+				{
+					header: "ТМС Курс списания",
+					dataIndex: 'tms_contr_out_currency_rate',
+					width: 100,
+					sortable: false
+				},
+				{
+					header: "ТМС Поступление",
+					dataIndex: 'tms_contr_in_sum',
+					width: 100,
+					sortable: false
+				},
+				{
+					header: "ТМС Валюта поступления",
+					dataIndex: 'tms_contr_in_currency',
+					width: 100,
+					sortable: false,
+					renderer: function(value, metaData, record) {
+						if ((record.get('inouttype') == 'IN') && (record.get('errorCurrency') == 1)) metaData.style = "background-color : #ff9999 !important";
+						return (value && value.length) ? value+'&nbsp;' : '&nbsp;';
+					}
+				},
+				{
+					header: "ТМС Курс поступления",
+					dataIndex: 'tms_contr_in_currency_rate',
+					width: 100,
+					sortable: false
+				},
+
+				//
+				{
+					header: "Контрагент",
+					dataIndex: 'contragent',
+					width: 150,
+					sortable: false,
+					renderer: function(value, metaData, record) {
+						if (record.get('errorContragent') == 1) metaData.style = "background-color : #ff9999 !important";
+						return (value && value.length) ? value+'&nbsp;' : '&nbsp;';
+					}
+				},
+				{
+					header: "Контрагент списание ТМС",
+					dataIndex: 'tms_contr_out',
+					width: 150,
+					sortable: false,
+					renderer: function(value, metaData, record) {
+						if ((record.get('inouttype') == 'OUT') && (record.get('errorContragent') == 1)) metaData.style = "background-color : #ff9999 !important";
+						return (value && value.length) ? value+'&nbsp;' : '&nbsp;';
+					}
+				},
+				{
+					header: "Контрагент поступление ТМС",
+					dataIndex: 'tms_contr_in',
+					width: 150,
+					sortable: false,
+					renderer: function(value, metaData, record) {
+						if ((record.get('inouttype') == 'IN') && (record.get('errorContragent') == 1)) metaData.style = "background-color : #ff9999 !important";
+						return (value && value.length) ? value+'&nbsp;' : '&nbsp;';
+					}
+				},
+				{
+					header: "",
+					dataIndex: 'billnum',
+					width: 100,
+					sortable: false
+				},
+				{
+					header: "",
+					dataIndex: 'billtid',
+					width: 100,
+					sortable: false
+				}
+			],
+			viewConfig: {
+				stripeRows: true
+			},
+			tbar: this.gridTbar,
+			bbar: this.gridBbar
+		});
+		this.grid.on('itemdblclick', function(view, rec, item, index, eventObj, options) {
+			this.ownerModule.app.doAjax({
+				module: this.ownerModule.moduleId,
+				method: 'toggleStatus',
+				id: rec.get('id')
+			},
+			function(res) {
+				rec.set('status', res.status)
+			},
+			this, this);
+		}, this);
+
+		this.grid.on('itemcontextmenu',function(view, rec, node, index, eventObj) {
+			this.grid.getSelectionModel().select(index, true, true);
+			var _contextMenu = Ext.create('Ext.menu.Menu', {
+				items: []
+			});
+			_contextMenu.showAt(eventObj.getXY());
+			eventObj.stopEvent();
+		}, this);
+		this.grid.on('select', function(sm, record, rowIndex, eOpts) {
+			this.selected = record;
+		}, this);
+		this.grid.getView().on('render', function(view) {
+			view.tip = Ext.create('Ext.tip.ToolTip', {
+				target: view.el,
+				delegate: view.cellSelector,
+				trackMouse: true,
+				autoHide: false,
+				listeners: {
+					'beforeshow': {
+						fn: function(tip){
+							var msg;
+							var record = this.grid.getView().getRecord(tip.triggerElement.parentNode);
+
+							msg = Ext.get(tip.triggerElement).dom.childNodes[0].innerHTML;
+
+							tip.update(msg.replace(/\n/g, '<br/>'));
+						},
+						scope: this
+					}
+				}
+			});
+		}, this);
+		
+		Ext.applyIf(config, {
+			border: false,
+			layout: 'border',
+			items: [
+				this.grid//, this.infoPnl
+			]
+		});
+
+		kDesktop.orderimport.main.superclass.constructor.call(this, config);
+	},
+	
+	showMask: function(msg) {
+		this.body.mask(msg + '...', 'x-mask-loading');
+	},
+
+	hideMask: function() {
+		this.body.unmask();
+	}
+});
