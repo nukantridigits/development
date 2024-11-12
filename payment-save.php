@@ -17,40 +17,32 @@ Ext.define('kDesktop.transportation3', {
 					ownerModule: this,
 					parent: this,
 					data: config.data,
-					clientConfig: config?.clientConfig ?? {}
+					clientConfig: config?.clientConfig ?? {},
+					itemId: 'dealsGridTab'
 				})
 			]
 		});
 
 		kDesktop.transportation3.superclass.constructor.call(this, config);
+	},
+	getTabItem: function (id) {
+		if (!id) return null
 
-		this.on('tabchange', this.onTabChange, this)
-	},
-	onTabChange: function(tabPanel, newTab) {
-		const newTabUid = newTab?.uid ?? false
-		if (newTabUid && newTabUid !== 'transportation-transportations') {
-			helpers.transportation.onTransportationTabOpen(newTabUid)
-		}
-	},
-	getTabItem: function(id) {
-		let tab = null
-        const items = this.items?.items ?? []
-		if (!helpers.types.isArrayWithLength(items)) return null
+		const items = this.items?.items ?? []
+		const TypesHelper = helpers.types
+
+		if (!TypesHelper.isArrayWithLength(items)) return null
+
+		const numericId = parseInt(id)
+
 		for (const item of items) {
-			if (item?.uid == id || item?.oid == id) {
-				tab = item
-				break
+			const itemTid = item?.tid ? parseInt(item.tid) : null
+			if (Number.isInteger(numericId) && itemTid === numericId) {
+				return item
 			}
 		}
-		return tab
-	},
-	closeTabById: function(uid) {
-		const tab = this.getTabItem(uid)
-		if (tab) {
-			this.remove(tab)
-		} else {
-			console.warn('Вкладка не найдена для uid:', uid);
-		}
+
+		return null
 	},
 	showMask: function(msg) {
 		this.body.mask(msg + '...', 'x-mask-loading');
@@ -142,7 +134,7 @@ Ext.define('kDesktop.transportation3.transportationsTaskPanel', {
 						showRegistersInContextMenu: responseData?.showRegistersInContextMenu === "1",
 						transportTypeList: responseData?.transportTypeList ?? {}
 					}
-					this.parent.parent.onEditTransportation(rec.get('objid'), 'edit', null, clientConfig)
+					this.parent.parent.onDealOpen(rec.get('objid'), 'edit', true)
 				}, this)
 			}
 		}, this)
@@ -236,6 +228,7 @@ Ext.define('kDesktop.transportation3.transportationsFilterPanel', {
 		this.showNbKzCurrencyRatesBlock = this.clientConfig?.showNbKzCurrencyRatesBlock ?? false
 		this.title = 'Фильтр';
 		this.closable = false;
+		this.selectedRowData = null
 
 		var width = Math.round(kDesktop.app.getWinWidth() / 4);
 		this.taskPanel = Ext.create('kDesktop.transportation3.transportationsTaskPanel', {
@@ -914,6 +907,18 @@ Ext.define('kDesktop.transportation3.transportationsFilterPanel', {
 								});
 							}
 						},
+						{xtype: 'displayfield', width: 20, value: ''},
+						{
+							xtype: 'button',
+							text: 'Копировать маршрут',
+							width: 140,
+							scope: this,
+							handler: () => {
+								const direction = this.selectedRowData?.direction ?? null
+								if (helpers.types.isNull(direction)) return false
+								this.ownerModule.app.copyToClipboard(direction)
+							}
+						},
 						{
 							xtype: 'component',
 							flex: 1
@@ -1005,7 +1010,9 @@ Ext.define('kDesktop.transportation3.transportationsFilterPanel', {
 			this.mainForm.searchCountryCmb.select(0);
 		}, this);
 	},
-
+	updateSelectedRowData: function (rowData) {
+		this.selectedRowData = rowData
+	},
 	_r: function(value) {
 		if (value && value.length)
 			return value;
@@ -1134,7 +1141,7 @@ Ext.define('kDesktop.transportation3.transportationsGridPanel', {
 			'ferryinvoicedate_str',
 			'ferrydocdate_str',
 			'profit',
-			'profitpercent',
+			'profitability',
 			'profitfact',
 			'profitabilityfact',
 			'delay_client',
@@ -1532,8 +1539,8 @@ Ext.define('kDesktop.transportation3.transportationsGridPanel', {
 			},
 			{
 				header: "Рентабельность %",
-				dataIndex: 'profitpercent',
-				width: getColumnWidth('profitpercent'),
+				dataIndex: 'profitability',
+				width: getColumnWidth('profitability'),
 				sortable: false
 			},
 			{
@@ -1563,6 +1570,11 @@ Ext.define('kDesktop.transportation3.transportationsGridPanel', {
 			bbar: this.gridBbar,
 			scrollTop: 0,
 			listeners: {
+				select: (view, record) => {
+					if (this.parent?.filterPanel) {
+						this.parent.filterPanel.updateSelectedRowData(record.data)
+					}
+				},
 				columnresize: function (headerCt, column, width) {
 					if (column?.dataIndex) {
 						const state = Ext.state.Manager.get(TRANSP_GRID_ALIAS) || { widths: {} }
@@ -1861,12 +1873,13 @@ Ext.define('kDesktop.transportation3.transportations', {
 
 		const TypesHelper = helpers.types
 		const configData = config?.data ?? {}
-		const clientConfig = config?.clientConfig ?? {}
+		this.clientConfig = config?.clientConfig ?? {}
 		this.priv = TypesHelper.isObjectAndHasProps(configData?.priv) ? configData.priv : {}
 		this.permissions = TypesHelper.isObjectAndHasProps(configData?.permissions) ? configData.permissions : {}
 		this.uid = 'transportation-transportations';
 		this.title = 'Грузоперевозки';
 		this.closable = false;
+
 		this.filterPanel = Ext.create('kDesktop.transportation3.transportationsFilterPanel', {
 			region: 'north',
 			height: 300,
@@ -1876,8 +1889,8 @@ Ext.define('kDesktop.transportation3.transportations', {
 			ownerModule: this.ownerModule,
 			parent: this,
 			data: config.data,
-			clientConfig: clientConfig,
-		});
+			clientConfig: this.clientConfig,
+		})
 
 		this.gridPanel = Ext.create('kDesktop.transportation3.transportationsGridPanel', {
 			region: 'center',
@@ -1885,8 +1898,8 @@ Ext.define('kDesktop.transportation3.transportations', {
 			ownerModule: this.ownerModule,
 			parent: this,
 			data: config.data,
-			clientConfig: clientConfig,
-		});
+			clientConfig: this.clientConfig,
+		})
 
 		this.reestrMenu = Ext.create('Ext.menu.Menu', {
 			items: [
@@ -1907,10 +1920,10 @@ Ext.define('kDesktop.transportation3.transportations', {
 			]
 		});
 
-		const showRegistry = clientConfig?.showRegistersInContextMenu &&
+		const showRegistry = this.clientConfig?.showRegistersInContextMenu &&
 			!RolesHelper.isOperationHidden(this.permissions, RolesHelper.RESOURCE_TRANSPORTATION_OPERATION, RolesHelper.OP_REGISTRY_NAME)
 		this.gridPanel.grid.on('itemdblclick', function(view, rec, item, index, eventObj, options) {
-			this.onEditTransportation(rec.get('id'), 'edit', null, clientConfig);
+			this.onDealOpen(rec.get('id'), 'edit', true);
 		}, this);
 		this.gridPanel.grid.on('containercontextmenu', function(view, eventObj){
 			var items = [];
@@ -1941,7 +1954,7 @@ Ext.define('kDesktop.transportation3.transportations', {
 						text: 'Создать новую',
 						scope: this,
 						handler: function (){
-							this.onEditTransportation(null, 'new', 0, clientConfig);
+							this.onDealOpen(null, 'new', true);
 						}
 					}
 				];
@@ -2031,7 +2044,7 @@ Ext.define('kDesktop.transportation3.transportations', {
 						text: 'Создать новую',
 						scope: this,
 						handler: function (){
-							this.onEditTransportation(null, 'new', 0, clientConfig);
+							this.onDealOpen(null, 'new', true);
 						}
 					},
 					'-',
@@ -2039,7 +2052,7 @@ Ext.define('kDesktop.transportation3.transportations', {
 						text: 'Редактировать',
 						scope: this,
 						handler: function (){
-							this.onEditTransportation(id, 'edit', null, clientConfig);
+							this.onDealOpen(id, 'edit', true);
 						}
 					},
 				];
@@ -2050,7 +2063,7 @@ Ext.define('kDesktop.transportation3.transportations', {
 						text: 'Копировать',
 						scope: this,
 						handler: function (){
-							this.onEditTransportation(id, 'copy', null, clientConfig);
+							this.onDealOpen(id, 'copy', true);
 						}
 					}
 				);
@@ -2061,7 +2074,7 @@ Ext.define('kDesktop.transportation3.transportations', {
 						text: 'Доп-заявка',
 						scope: this,
 						handler: function (){
-							this.onEditTransportation(id, 'multi', null, clientConfig);
+							this.onDealOpen(id, 'multi', true);
 						}
 					}
 				);
@@ -2082,9 +2095,12 @@ Ext.define('kDesktop.transportation3.transportations', {
 													id
 												},
 												function() {
-													this.gridPanel.gridBbar.doRefresh()
-													this.ownerModule.closeTabById(id)
+													const tabToClose = this.ownerModule.getTabItem(id)
+													if (tabToClose) {
+														this.ownerModule.remove(tabToClose, true)
+													}
 													helpers.transportation.onTransportationTabClose(id)
+													this.gridPanel.gridBbar.doRefresh()
 												},
 												this, this)
 											}
@@ -2278,40 +2294,34 @@ Ext.define('kDesktop.transportation3.transportations', {
 		}, this);
 
 		this.on('afterrender', function () {
+			// Устанавливаем ширину колонок, если есть сохранённое состояние
 			const state = this.gridPanel.grid.getState()
-			if (state && state.columns && state.columns.length) for (var i = 0; i < state.columns.length; i++) {
-				const col = state.columns[i];
-				if (col && col.width && (col.width > 0) && this.gridPanel.grid.columns[i]) this.gridPanel.grid.columns[i].setWidth(col.width);
+			if (state && state.columns && state.columns.length) {
+				for (let i = 0; i < state.columns.length; i++) {
+					const col = state.columns[i]
+					if (col && col.width && col.width > 0 && this.gridPanel.grid.columns[i]) {
+						this.gridPanel.grid.columns[i].setWidth(col.width)
+					}
+				}
 			}
 
-			let tabs = helpers.transportation.getTabListLocalStorage()
-			tabs = helpers.transportation.removeEmptyTabs(tabs)
+			const DealHelper = helpers.transportation
+			const tabs = DealHelper.removeEmptyTabs(DealHelper.getTabListLocalStorage())
 			if (!TypesHelper.isArrayWithLength(tabs)) return false
 
-			const promises = []
-			const activeTab = tabs.find(tab => tab.active)
-			const activeId = helpers.transportation.getTransportationIdByTab(activeTab)
-			for (const tab of tabs) {
-				const tid = helpers.transportation.getTransportationIdByTab(tab)
-				if (!tid || tid.includes('new')) continue
-
-				promises.push(new Promise((resolve) => {
-					this.onEditTransportation(tid, 'edit', null, clientConfig, resolve, false)
-				}))
-			}
-
-			Promise.all(promises).then(() => {
-				const activeTab = tabs.find(tab => tab.active)
-				if (!activeTab) return false
-
-				const activeId = helpers.transportation.getTransportationIdByTab(activeTab)
-				if (!activeId) return false
-
-				const tabToActivate = this.ownerModule.getTabItem(activeId)
-				if (!tabToActivate) return false
-
-				this.ownerModule.setActiveTab(tabToActivate)
+			// Добавляем все вкладки, но не активируем их
+			tabs.forEach(tabData => {
+				this.onDealOpen(tabData.id, 'edit', false)
 			})
+
+			// Активируем только ту вкладку, которая была активна
+			const activeTabData = tabs.find(tab => tab.active)
+			if (activeTabData) {
+				const activeTab = this.ownerModule.getTabItem(activeTabData.id)
+				if (activeTab) {
+					this.ownerModule.setActiveTab(activeTab) // Устанавливаем активную вкладку из localStorage
+				}
+			}
 		}, this)
 	},
 	enableCreateBill1cMode: function() {
@@ -2399,7 +2409,6 @@ Ext.define('kDesktop.transportation3.transportations', {
 			this.gridPanel.checkColumn.setHeaderChecked(false);
 		}
 	},
-
 	createBill1cModeUncheckColumn: function() {
 		if (this.gridPanel.store.getCount()) for(var i=0; i<this.gridPanel.store.getCount(); i++) {
 			var record = this.gridPanel.store.getAt(i);
@@ -2410,7 +2419,6 @@ Ext.define('kDesktop.transportation3.transportations', {
 		this.createBill1cModeClientCurrency = '';
 		this.gridPanel.checkColumn.checkedCount = 0;
 	},
-
 	сreateBill1c2: function() {
 		if (this.gridPanel.checkColumn.checkedCount == 0) {
 			Ext.MessageBox.alert('Ошибка', 'Не выбрано ни одной записи');
@@ -2426,71 +2434,61 @@ Ext.define('kDesktop.transportation3.transportations', {
 
 		Ext.create('kDesktop.transportation3.createBill1cWnd2', { ownerModule: this.ownerModule, parent: this, data: data }).show();
 	},
-	onEditTransportation: function(oid, mode, type, clientConfig, resolve, updateLsTabs = true, isActive = false) {
-		if (updateLsTabs) {
-			if (oid !== 'transportation-transportations') {
-				helpers.transportation.onTransportationTabOpen(oid) // manage transportations tab list in LocalStorage
-				const existingTab = this.ownerModule.items.findBy(function (item) {
-					return item.oid === oid
-				})
+	onDealOpen: function(tid, mode, setActive = true) {
+		const DealHelper = helpers.transportation
 
-				if (existingTab) {
-					this.ownerModule.setActiveTab(existingTab)
-					if (typeof resolve === 'function') {
-						resolve()
+		// Сохраняем оригинальный id для копии/доп-заявки
+		const originalId = (mode === 'copy' || mode === 'multi') ? tid : null
+		tid = (mode === 'copy' || mode === 'multi') ? 'new' : (tid || 'new')
+
+		const existingTab = this.ownerModule.items.findBy(function(item) {
+			return item.tid === tid || (tid === 'new' && item.tid === 'new')
+		})
+
+		if (existingTab) {
+			if (setActive) {
+				this.ownerModule.setActiveTab(existingTab)
+				DealHelper.onTransportationTabOpen(tid)
+			}
+
+			return existingTab
+		}
+
+		const tabs = DealHelper.getTabListLocalStorage()
+		const tabData = tabs.find(tab => tab.id === tid.toString())
+		const multiId =  tabData?.multiId ?? null
+
+		const newTab = Ext.create('kDesktop.transportation3.dealTab', {
+			ownerModule: this.ownerModule,
+			permissions: this.permissions,
+			clientConfig: this.clientConfig,
+			tid,
+			multiId, // Передаем multiId для формирования корректного тайтла доп-заявок (из localStorage)
+			originalId, // Передаем оригинальный id для копирования/доп-заявки
+			mode,
+			closable: true,
+			dataLoaded: false,
+			listeners: {
+				activate: function() {
+					if (!this.dataLoaded) {
+						this.loadDealData()
+						this.dataLoaded = true
 					}
-					return false
+					DealHelper.onTransportationTabOpen(tid)
+				},
+				beforeclose: function() {
+					DealHelper.onTransportationTabClose(tid)
 				}
 			}
+		})
+
+		this.ownerModule.add(newTab)
+
+		if (setActive) {
+			this.ownerModule.setActiveTab(newTab)
 		}
 
-		let tab = null
-		let uid = ''
-		if ((mode === 'new') || (mode === 'copy') || (mode === 'multi')) {
-			uid = 'new'
-		} else {
-			uid = oid
-			tab = this.ownerModule.getTabItem(uid)
-		}
-
-		if (!tab) {
-			this.ownerModule.app.doAjax({
-				module: this.ownerModule.moduleId,
-				method: 'transpData',
-				mode: mode,
-				id: (mode === 'new') ? 0 : oid
-			},
-			function(res) {
-				if ((mode === 'copy') || (mode === 'multi')) {
-					mode = 'new'
-					oid = null
-				}
-
-				tab = Ext.create('kDesktop.transportation3.transpEdit', {
-					ownerModule: this.ownerModule,
-					parent: this,
-					uid: uid,
-					oid: oid,
-					data: res,
-					mode: mode,
-					permissions: this.permissions,
-					clientConfig: clientConfig,
-				})
-
-				this.ownerModule.add(tab)
-				this.ownerModule.setActiveTab(tab)
-
-				if (typeof resolve === 'function') {
-					resolve()
-				}
-			},
-				this, this)
-		} else {
-			this.ownerModule.setActiveTab(tab)
-			if (typeof resolve === 'function') {
-				resolve()
-			}
-		}
+		return newTab
 	},
 	makeTN: function(id) {
 		var url = this.ownerModule.app.connectUrl+'?module='+this.ownerModule.moduleId+'&method=makeTN&id='+id;
@@ -2528,7 +2526,10 @@ Ext.define('kDesktop.transportation3.transportations', {
 	}
 });
 
-Ext.define('kDesktop.transportation3.transportationsUnloadCheckWnd', {
+// Модальное окно со сделками у которых дата выгрузки не подтверждена, активируется в шаблоне index.tpl
+// Временно отключено, при активации надо будет твикнуть компонент, чтобы эта модалка вписывалась в новый подход
+// к открытию вкладок сделок
+/*Ext.define('kDesktop.transportation3.transportationsUnloadCheckWnd', {
 	extend: 'Ext.window.Window',
 	moduleId: 'transportation3',
 	constructor: function(config) {
@@ -2542,7 +2543,7 @@ Ext.define('kDesktop.transportation3.transportationsUnloadCheckWnd', {
 			parent: this,
 		});
 		this.gridPanel.grid.on('itemdblclick', (view, rec, item, index, eventObj, options) =>
-			this.onEditTransportation(rec.get('id'), 'edit', null, this.clientConfig))
+			this.onDealOpen(rec.get('id'), 'edit', null, this.clientConfig))
 
 		this.gridPanel.grid.on('containercontextmenu', function(view, eventObj){
 			eventObj.stopEvent();
@@ -2552,7 +2553,7 @@ Ext.define('kDesktop.transportation3.transportationsUnloadCheckWnd', {
 				{
 					text: 'Редактировать',
 					scope: this,
-					handler: () => this.onEditTransportation(rec.get('id'), 'edit', null, this.clientConfig)
+					handler: () => this.onDealOpen(rec.get('id'), 'edit', null, this.clientConfig)
 				},
 			];
 
@@ -2620,7 +2621,7 @@ Ext.define('kDesktop.transportation3.transportationsUnloadCheckWnd', {
 
 		kDesktop.transportation3.transportationsUnloadCheckWnd.superclass.constructor.call(this, config);
 	},
-	onEditTransportation: function(oid, mode, type, clientConfig = {}) {
+/*	onDealOpen: function(oid, mode, type, clientConfig = {}) {
 		this.app.doAjax({
 			module: this.moduleId,
 			method: 'transpData',
@@ -2645,7 +2646,7 @@ Ext.define('kDesktop.transportation3.transportationsUnloadCheckWnd', {
 	hideMask: function() {
 		this.body.unmask();
 	}
-});
+});*/
 
 Ext.define('kDesktop.transportation3.transpEdit', {
 	extend: 'Ext.panel.Panel',
@@ -2661,11 +2662,7 @@ Ext.define('kDesktop.transportation3.transpEdit', {
 		this.data = config.data;
 		this.mode = config.mode;
 		this.priv = (config.data && config.data.priv) ? config.data.priv : null;
-
-		if (this.mode == 'new')
-			this.title = 'Новая грузоперевозка';
-		else
-			this.title = 'Грузоперевозка ' + this.data.data.idstr;
+		this.linkedDeals = this.data.linkedDeals ?? []
 
 		this.generalPanel = Ext.create('kDesktop.transportation3.transpEdit.generalPanel', {
 			title: 'Общие',
@@ -2736,7 +2733,7 @@ Ext.define('kDesktop.transportation3.transpEdit', {
 			parent: this,
 		});
 
-		this.curDiffPanel = Ext.create('kDesktop.transportation3.transpEdit.curDiffPanel', {
+		this.calcPanel = Ext.create('kDesktop.transportation3.transpEdit.calcPanel', {
 			title: 'Расчеты',
 			hidden: RolesHelper.isTransportationTabHidden(this.permissions, RolesHelper.TAB_CALCULATIONS_NAME),
 			ownerModule: this.ownerModule,
@@ -2753,7 +2750,7 @@ Ext.define('kDesktop.transportation3.transpEdit', {
 			this.finePanel,
 			this.reportPanel,
 			this.surveerPanel,
-			this.curDiffPanel
+			this.calcPanel
 		];
 
 		if (this.priv && this.priv.transportation && this.priv.transportation.viewLog) {
@@ -2861,11 +2858,12 @@ Ext.define('kDesktop.transportation3.transpEdit', {
 					text: 'Закрыть',
 					iconCls: 'close-icon',
 					scope: this,
-					handler: function(){
-						this.close();
+					handler: () =>{
+						helpers.transportation.onTransportationTabClose(this.oid)
+						this.parent.close()
 					}
 				}
-			]
+			],
 		});
 
 		this.mainForm = Ext.create('Ext.form.Panel', {
@@ -2880,13 +2878,58 @@ Ext.define('kDesktop.transportation3.transpEdit', {
 
 		this.sdoctplMenu = Ext.create('Ext.menu.Menu', { items: [] });
 
+		const linkedDealsItems = this.linkedDeals.map(deal => ({
+			xtype: 'button',
+			text: deal?.title ?? '',
+			cls: 'default-button-inside-tbar',
+			style: {
+				margin: '0 5px'
+			},
+			handler: function () {
+				const tid = deal?.tid ?? null
+				console.log(tid)
+				if (helpers.types.isNull(tid)) return false
+
+				const targetComponent = Ext.ComponentQuery.query('#dealsGridTab')?.[0]
+				if (!targetComponent) return false
+
+				targetComponent.onDealOpen(parseInt(tid), 'edit')
+			}
+		}))
+
+
 		Ext.applyIf(config, {
 			border: false,
 			tbar: [
 				{
-					text: 'Документы',
-					menu: this.sdoctplMenu
-				}
+					xtype: 'button',
+					text: 'Скачать документы',
+					cls: 'default-button-inside-tbar',
+					style: {
+						margin: '5px 0'
+					},
+					handler: () => {
+						let templates = this.data?.sdoctpl ?? []
+						if (!helpers.types.isArrayWithLength(templates)) {
+							Ext.Msg.alert('Нет шаблонов', 'Список шаблонов пуст')
+							return false
+						}
+
+						Ext.create('kDesktop.downloadDocsModal', {
+							oid: this.oid,
+							templates: templates
+						}).show()
+					}
+				},
+				{
+					xtype: 'tbtext',
+					hidden: linkedDealsItems.length === 0,
+					text: 'Связанные сделки:',
+					style: {
+						'margin': '0 10px 0 15px'
+					}
+				},
+				...linkedDealsItems,
 			],
 			layout: {
 				type: 'hbox',
@@ -2902,31 +2945,11 @@ Ext.define('kDesktop.transportation3.transpEdit', {
 			if (this.data) this.loadData();
 		}, this);
 
-		this.on('destroy', function(o, eOpts) {
-			if (this.fromUnloadCheckWnd) this.parent.close();
-		}, this);
-
-		const onBeforeClose = () => {
-			const oid = this.oid ?? 'new'
-			helpers.transportation.onTransportationTabClose(oid)
-		}
-		this.on('beforeclose', onBeforeClose, this);
+		// this.on('destroy', function(o, eOpts) {
+		// 	if (this.fromUnloadCheckWnd) this.parent.close();
+		// }, this);
 	},
 	loadData: function() {
-		if (this.data && this.data.sdoctpl) {
-			this.sdoctplMenu.removeAll();
-			for(var i in this.data.sdoctpl) {
-				if (!this.data.sdoctpl.hasOwnProperty(i)) continue;
-				this.sdoctplMenu.add({
-					text: this.data.sdoctpl[i].name,
-					url: '?m=sdoctpl&p=createDoc&did='+this.data.sdoctpl[i].id+'&id='+this.oid+'&from=transp',
-					handler: function (){
-						window.open(this.url, "download");
-					}
-				});
-			}
-		}
-
 		const RolesHelper = helpers.roles
 		if (this.data.userList) this.generalPanel.logistCmb.store.loadData(this.data.userList);
 		if (this.data.managerList) this.generalPanel.managerCmb.store.loadData(this.data.managerList);
@@ -2944,6 +2967,7 @@ Ext.define('kDesktop.transportation3.transpEdit', {
 
 		if (!RolesHelper.isFieldHidden(this.permissions, RolesHelper.RESOURCE_TRANSPORTATIONS, 'client_sns')) {
 			this.clientPanel.clientSnsFld.setValue('Платежный баланс: ' + this._s(this.data.data.client_sns))
+			this.clientPanel.doLayout()
 		}
 
 		if (!RolesHelper.isFieldHidden(this.permissions, RolesHelper.RESOURCE_TRANSPORTATIONS, 'client_accountant')) {
@@ -2956,6 +2980,7 @@ Ext.define('kDesktop.transportation3.transpEdit', {
 
 		if (!RolesHelper.isFieldHidden(this.permissions, RolesHelper.RESOURCE_TRANSPORTATIONS, 'ferry_sns')) {
 			this.ferryPanel.ferrySnsFld.setValue('Платежный баланс: ' + this._s(this?.data?.data?.ferry_sns));
+			this.ferryPanel.doLayout()
 		}
 		if (!RolesHelper.isFieldHidden(this.permissions, RolesHelper.RESOURCE_TRANSPORTATIONS, 'clientdocdelivery') && this.data.clientDocdeliveryDict) {
 			this.docPanel.mainPanel.clientDocdeliveryCmb.store.loadData(this.data.clientDocdeliveryDict);
@@ -2972,7 +2997,7 @@ Ext.define('kDesktop.transportation3.transpEdit', {
 			this.mainForm.getForm().setValues(this.data.data);
 		}
 
-		if (this.mode == 'new') this.data.data = {};
+		if (this.mode === 'new') this.data.data = {};
 	},
 	_s: function(value) {
 		if (value) return value;
@@ -3018,25 +3043,29 @@ Ext.define('kDesktop.transportation3.transpEdit', {
 		}
 
 		Ext.MessageBox.confirm('Сохранение', 'Вы уверены что хотите сохранить эту запись?',
-			function(btn){
-				if(btn == 'yes') {
-					var data = {};
+			function (btn) {
+				const mode = this.mode
+
+				if (btn === 'yes') {
+					const data = {};
 					data.data = this.ownerModule.app.getFormValues(this.mainForm);
 					data.data.multimodal_id = this.multimodal_id;
-					data.origData = (this.data && this.data.data) ? this.data.data : null;
+					data.origData = (this.data && this.data.data) && !['copy', 'multi'].includes(mode)
+						? this.data.data
+						: null
 
-					data.loadGridDeleted = this.loadUnloadPanel.loadStoreDeleted;
-					data.unloadGridDeleted = this.loadUnloadPanel.unloadStoreDeleted;
+					data.loadGridDeleted = this.loadUnloadPanel.loadStoreDeleted
+					data.unloadGridDeleted = this.loadUnloadPanel.unloadStoreDeleted
 
-					data.loadGridOrig = this.data.loadGrid;
-					data.unloadGridOrig = this.data.unloadGrid;
+					data.loadGridOrig = this.data.loadGrid
+					data.unloadGridOrig = this.data.unloadGrid
 
-					data.loadGrid = [];
-					data.unloadGrid = [];
+					data.loadGrid = []
+					data.unloadGrid = []
 
-					var i, rec;
-					for(i = 0; i < this.loadUnloadPanel.loadStore.getCount(); i++) {
-						rec = this.loadUnloadPanel.loadStore.getAt(i);
+					let rec = null
+					for (let i = 0; i < this.loadUnloadPanel.loadStore.getCount(); i++) {
+						rec = this.loadUnloadPanel.loadStore.getAt(i)
 						data.loadGrid.push({
 							id: rec.get('id'),
 							extid: rec.get('extid'),
@@ -3046,9 +3075,10 @@ Ext.define('kDesktop.transportation3.transpEdit', {
 							address: rec.get('address'),
 							contacts: rec.get('contacts'),
 							dirty: (rec.dirty && (rec.dirty === true)) ? 1 : 0
-						});
+						})
 					}
-					for(i = 0; i < this.loadUnloadPanel.unloadStore.getCount(); i++) {
+
+					for (let i = 0; i < this.loadUnloadPanel.unloadStore.getCount(); i++) {
 						rec = this.loadUnloadPanel.unloadStore.getAt(i);
 						data.unloadGrid.push({
 							id: rec.get('id'),
@@ -3059,54 +3089,79 @@ Ext.define('kDesktop.transportation3.transpEdit', {
 							address: rec.get('address'),
 							contacts: rec.get('contacts'),
 							dirty: (rec.dirty && (rec.dirty === true)) ? 1 : 0
-						});
+						})
 					}
 
 					this.ownerModule.app.doAjax({
-						module: this.ownerModule.moduleId,
-						method: 'transpSave',
-						mode: this.mode,
-						id: (this.mode === 'new') ? 0 : this.oid,
-						data: Ext.encode(data)
-					},
-					function(res) {
-						const tid = res?.id ?? null
-
-						if (this.fromUnloadCheckWnd) {
-							this.parent.parent.gridPanel.store.load();
-							this.close();
-						}
-						else {
-							const tab = this.ownerModule.getTabItem('transportation-transportations')
-							if (tab) {
-								this.parent.gridPanel.store.load()
+							module: this.ownerModule.moduleId,
+							method: 'transpSave',
+							// Если это копирование или доп. заявка, то устанавливаем режим 'new', иначе используем текущий режим
+							mode: ['copy', 'multi'].includes(mode) ? 'new' : mode,
+							// Если это новая запись, копия или доп. заявка, устанавливаем идентификатор 0, иначе используем текущий id сделки
+							id: ['new', 'copy', 'multi'].includes(mode) ? 0 : this.oid,
+							data: Ext.encode(data)
+						},
+						function (res) {
+							const data = res?.data?.data ?? {}
+							const tid = res?.id ?? null
+							const isMultimodal = data?.multimodal === 1 // Допзаявка?
+							const calcPanel = this.calcPanel
+							if (typeof calcPanel?.calc === 'function') {
+								calcPanel.calc() // Динамическое обновление вкладки расчеты при сохранении сделки
+							}
+							// При успешных запросах на создание/редактирование сделок - обновляем грид Грузоперевозки
+							const gridPanel = Ext.getCmp('transportation_transportationsGridPanel');
+							if (gridPanel) {
+								gridPanel.store.load()
 							}
 
-							if (tid && this.mode === 'new') {
-								this.mode = 'edit'
+							const tidString = tid.toString() // Преобразуем идентификатор сделки в строку
+							const DealHelper = helpers.transportation
 
-								this.oid = tid
-								this.uid = tid
-								helpers.transportation.changeNewTransportationTabId(tid.toString())
+							// Обновляем tid и другие параметры после сохранения новой сделки/копии/доп-заявки
+							if (tid && ['new', 'copy', 'multi'].includes(mode)) {
+								DealHelper.changeNewTransportationTabId(tidString)
 
 								this.financePanel.gridStore.proxy.extraParams.tid = tid
-								this.docPanel.docGridStore.proxy.extraParams.tid = tid;
-								this.surveerPanel.docGridStore.proxy.extraParams.tid = tid;
-								this.reportPanel.store.proxy.extraParams.tid = tid;
+								this.docPanel.docGridStore.proxy.extraParams.tid = tid
+								this.surveerPanel.docGridStore.proxy.extraParams.tid = tid
+								this.reportPanel.store.proxy.extraParams.tid = tid
 							}
 
 							if (res.data) {
-								this.data = res.data;
+								this.data = res.data
+								// Загружаем данные в соответствующие панели
 								this.loadData()
+								// Если режим копирования или доп. заявки, заполняем форму клиента
+								if (['copy', 'multi'].includes(mode)) {
+									this.clientPanel.getForm().setValues(this.data.data)
+								}
 
-								this.title = 'Грузоперевозка ' + this.data.data.idstr;
-								this.setTitle(this.title);
+								// Обновляем идентификатор (tab.multiId в localStorage) для доп/заявок
+								if (isMultimodal) {
+									DealHelper.handleMultimodalTab(tidString, data)
+								}
+
+								// Получаем активную вкладку для дальнейших действий
+								const activeTab = this.ownerModule.getActiveTab()
+								// Если это новая сделка, копия или доп. заявка, обновляем вкладку
+								if (['new', 'copy', 'multi'].includes(mode) && activeTab) {
+									this.mode = 'edit' // Устанавливаем режим редактирования
+									this.oid = tidString // Обновляем идентификатор объекта сделки
+									activeTab.tid = tidString // Обновляем идентификатор сделки на вкладке
+
+									// Генерируем строку для заголовка вкладки
+									const idStr = DealHelper.getEditTabId(tid, data) ?? ''
+									const title = `Грузоперевозка ${idStr}` // Формируем новый заголовок
+									activeTab.setTitle(title) // Применяем новый заголовок для вкладки
+
+									// Убираем вкладки c id = 'new', если таковые есть
+									DealHelper.removeEmptyTabs()
+								}
 							}
 
-							if (this.logStore) this.logStore.load();
-						}
-					},
-					this, this);
+							if (this.logStore) this.logStore.load()
+						}, this)
 				}
 			},
 			this
@@ -3159,11 +3214,10 @@ Ext.define('kDesktop.transportation3.transpEdit.fromUnloadCheckWnd', {
 			preventHeader: true,
 			onEsc: Ext.emptyFn,
 			layout: 'fit',
-// 			autoHeight: true,
 			modal: true,
-// 			plain: true,
 			border: false,
 			items: [
+				// TODO
 				Ext.create('kDesktop.transportation3.transpEdit', {
 					ownerModule: this.ownerModule,
 					parent: this,
@@ -3361,37 +3415,7 @@ Ext.define('kDesktop.transportation3.transpEdit.clientPanel', {
 				}
 			}
 		});
-		this.clientPersonStore = Ext.create('Ext.data.Store', {
-			pageSize: 40,
-			root: 'items',
-			idProperty: 'id',
-			remoteSort: true,
-			autoLoad: true,
-			fields: [
-				'id',
-				'name'
-			],
-			proxy: {
-				actionMethods: 'POST',
-				type: 'ajax',
-				url: this.ownerModule.app.connectUrl,
-				extraParams: {
-					module: this.ownerModule.moduleId,
-					method: 'clientPersonStore',
-					id: this.parent.data.data.client,
-					tid: this.parent.oid
-				},
-				reader: {
-					type: 'json',
-					root: 'items',
-					totalProperty: 'totalCount'
-				}
-			},
-			sorters: [{
-				property: 'id',
-				direction: 'ASC'
-			}]
-		});
+
 		const RolesHelper = helpers.roles
 		const clientRequestFieldsFiltered = RolesHelper.filterFormFields([
 			{
@@ -3428,6 +3452,15 @@ Ext.define('kDesktop.transportation3.transpEdit.clientPanel', {
 			}
 		}
 
+		const data = this.parent?.data?.data ?? {}
+		const clientContract = {
+			currency: data?.client_currency ?? '',
+			payType: data?.client_contract_pay_type ?? '',
+		}
+
+		const clientContractCurrencyString =
+			helpers.transportationContract.getTransportationContractorCurrency(clientContract.payType, clientContract.currency, true)
+
 		Ext.applyIf(config, {
 			closable: false,
 			autoScroll: true,
@@ -3453,6 +3486,8 @@ Ext.define('kDesktop.transportation3.transpEdit.clientPanel', {
 								listeners: {
 									select: {
 										fn: function (cmb) {
+											const selectedClientId = cmb.getValue()
+
 											var cmb2 = this.clientContractCmb;
 											cmb2.enable();
 											cmb2.reset();
@@ -3463,15 +3498,11 @@ Ext.define('kDesktop.transportation3.transpEdit.clientPanel', {
 											this.clientContractStore.load();
 											cmb2.bindStore(this.clientContractStore);
 
-											var cmb3 = this.clientPersonCmb;
-											cmb3.enable();
-											cmb3.reset();
-											cmb3.store.removeAll();
-											cmb3.lastQuery = null;
-											cmb3.setValue();
-											this.clientPersonStore.proxy.extraParams.id = cmb.getValue();
-											this.clientPersonStore.load();
-											cmb3.bindStore(this.clientPersonStore);
+											const clientPersonCombobox = this.down('personenhancedcombobox')
+											if (!clientPersonCombobox) return false
+											clientPersonCombobox.fireEvent('resetAndUpdateStore', {
+												contractorId: selectedClientId ? parseInt(selectedClientId) : null
+											})
 										},
 										scope: this
 									}
@@ -3521,23 +3552,18 @@ Ext.define('kDesktop.transportation3.transpEdit.clientPanel', {
 						]
 					},
 					{
-						items: [
+						xtype: 'container',
+						layout: { type: 'hbox'},
+                        items: [
 							{
-								xtype: 'combobox',
+								xtype: 'personenhancedcombobox',
+								initialValue: this.parent?.data?.data?.clientperson ?? null,
+								contractorId: this.parent.data.data.client,
+								actionName: 'clientPersonStore',
+								tid: this.parent.oid,
 								name: 'clientperson',
-								ref: 'clientPersonCmb',
-								value: this.parent.data.data.clientperson,
 								fieldLabel: 'Контактное лицо',
-								labelSeparator: '',
-								labelWidth: 170,
-								width: 870,
-								queryMode: 'remote',
-								displayField: 'name',
-								valueField: 'id',
-								store: this.clientPersonStore,
-								editable: false,
-								allowBlank: false
-							}
+							},
 						]
 					},
 				], this.permissions, RolesHelper.RESOURCE_TRANSPORTATIONS),
@@ -3597,9 +3623,44 @@ Ext.define('kDesktop.transportation3.transpEdit.clientPanel', {
 					items: [
 						{xtype: 'displayfield', width: 170, value: 'Маршрут (откуда/куда)'},
 						{
+							xtype: 'component',
+							html: '<div class="copy-btn icon-copy"></div>',
+							listeners: {
+								afterrender: (component) => {
+									component.getEl().on('click', () => {
+										const clientFromPlace = this.parent.data?.data?.clientfromplace ?? ''
+										const clientToPlace = this.parent.data?.data?.clienttoplace ?? ''
+										const data = `${clientFromPlace} - ${clientToPlace}`
+
+										if (navigator?.clipboard && navigator.clipboard?.writeText) {
+											navigator.clipboard.writeText(data).then(() => console.log('Text copied to clipboard successfully'))
+												.catch((err) => console.error(`Error copying text: ${err}`))
+										} else {
+											const tempInput = document.createElement('textarea')
+											tempInput.style.position = 'absolute'
+											tempInput.style.left = '-9999px'
+											tempInput.value = data
+											document.body.appendChild(tempInput)
+											tempInput.select()
+											try {
+												document.execCommand('copy')
+											} catch (err) {
+												console.error(`Error copying text: ${err}`)
+											}
+
+											document.body.removeChild(tempInput)
+										}
+									})
+								}
+							},
+							width: 22,
+							height: 22,
+							cls: 'copy-btn-wrapper',
+						},
+						{
 							xtype: 'textfield',
 							name: 'clientfromplace',
-							width: 350,
+							width: 339,
 							enableKeyEvents: true,
 							listeners: {
 								'keyup': {
@@ -3613,7 +3674,7 @@ Ext.define('kDesktop.transportation3.transpEdit.clientPanel', {
 						{
 							xtype: 'textfield',
 							name: 'clienttoplace',
-							width: 350,
+							width: 339,
 							enableKeyEvents: true,
 							listeners: {
 								'keyup': {
@@ -3623,6 +3684,23 @@ Ext.define('kDesktop.transportation3.transpEdit.clientPanel', {
 									scope: this
 								}
 							}
+						}
+					]
+				},
+				{
+					items: [
+						{xtype: 'displayfield', width: 170, value: 'Направление'},
+						{
+							xtype: 'combobox',
+							name: 'region',
+							ref: 'regionCmb',
+							width: 250,
+							queryMode: 'local',
+							displayField: 'value',
+							valueField: 'key',
+							editable: false,
+							allowBlank: false,
+							store: Ext.create('Ext.data.JsonStore', {fields: ['key', 'value'], idProperty: 'key'})
 						}
 					]
 				},
@@ -3942,14 +4020,20 @@ Ext.define('kDesktop.transportation3.transpEdit.clientPanel', {
 								minValue: 0,
 								decimalPrecision: 2,
 								hideTrigger: true,
+							},
+							{
+								xtype: 'displayfield',
+								width: 135,
+								value: clientContractCurrencyString,
 								style: {
-									marginRight: '40px'
+									marginLeft: '8px',
+									marginRight: '27px',
 								}
 							},
 							{
 								xtype: 'textfield',
 								name: 'clientotherchargestarget',
-								width: 560,
+								width: 410,
 								fieldLabel: 'Цель',
 								labelSeparator: '',
 								labelWidth: 100,
@@ -4273,23 +4357,6 @@ Ext.define('kDesktop.transportation3.transpEdit.clientPanel', {
 					}
 				], this.permissions, RolesHelper.RESOURCE_TRANSPORTATIONS),
 				{
-					items: [
-						{xtype: 'displayfield', width: 170, value: 'Направление'},
-						{
-							xtype: 'combobox',
-							name: 'region',
-							ref: 'regionCmb',
-							width: 250,
-							queryMode: 'local',
-							displayField: 'value',
-							valueField: 'key',
-							editable: false,
-							allowBlank: false,
-							store: Ext.create('Ext.data.JsonStore', {fields: ['key', 'value'], idProperty: 'key'})
-						}
-					]
-				},
-				{
 					xtype : 'container',
 					layout: {
 						type: 'hbox'
@@ -4392,7 +4459,7 @@ Ext.define('kDesktop.transportation3.transpEdit.loadUnloadPanel', {
 					}
 				},
 				{
-					header: "Примечание",
+					header: "Грузоотправитель",
 					dataIndex: 'comment',
 					width: 280,
 					sortable: true,
@@ -4576,7 +4643,7 @@ Ext.define('kDesktop.transportation3.transpEdit.loadUnloadPanel', {
 					}
 				},
 				{
-					header: "Примечание",
+					header: "Грузополучатель",
 					dataIndex: 'comment',
 					width: 280,
 					sortable: true,
@@ -4937,7 +5004,7 @@ Ext.define('kDesktop.transportation3.transpEdit.ferryPanel', {
 		this.priv = this.parent.priv;
 		this.permissions = config?.permissions ?? {}
 		this.clientConfig = config?.clientConfig ?? {}
-
+		this.transportTypeList = this.clientConfig?.transportTypeList ?? []
 		this.addEvents('updatecarliststore')
 		this.on('updatecarliststore', this.onUpdateCarListStore, this)
 
@@ -4985,37 +5052,6 @@ Ext.define('kDesktop.transportation3.transpEdit.ferryPanel', {
 				}
 			}
 		});
-		this.ferryPersonStore = Ext.create('Ext.data.Store', {
-			pageSize: 40,
-			root: 'items',
-			idProperty: 'id',
-			remoteSort: true,
-			autoLoad: true,
-			fields: [
-				'id',
-				'name'
-			],
-			proxy: {
-				actionMethods: 'POST',
-				type: 'ajax',
-				url: this.ownerModule.app.connectUrl,
-				extraParams: {
-					module: this.ownerModule.moduleId,
-					method: 'ferryPersonStore',
-					id: this.parent.data.data.ferryman,
-					tid: this.parent.oid
-				},
-				reader: {
-					type: 'json',
-					root: 'items',
-					totalProperty: 'totalCount'
-				}
-			},
-			sorters: [{
-				property: 'id',
-				direction: 'ASC'
-			}]
-		});
 
 		const RolesHelper = helpers.roles
 		this.ferryCarsStore = helpers.ferrycars.createFerryCarsStore(
@@ -5029,6 +5065,15 @@ Ext.define('kDesktop.transportation3.transpEdit.ferryPanel', {
 		const ferryCarIsShowed = !RolesHelper.isFieldHidden(this.permissions, RolesHelper.RESOURCE_TRANSPORTATIONS, 'ferrycar')
 		const ferrycarPpIsShowed = !RolesHelper.isFieldHidden(this.permissions, RolesHelper.RESOURCE_TRANSPORTATIONS, 'ferrycarpp')
 		const typetsIsShowed = !RolesHelper.isFieldHidden(this.permissions, RolesHelper.RESOURCE_TRANSPORTATIONS, 'typets')
+
+		const data = this.parent?.data?.data ?? {}
+		const carrierContract = {
+			currency: data?.ferry_currency ?? '',
+			payType: data?.carrier_contract_pay_type,
+		}
+
+		const carrierContractCurrencyString =
+			helpers.transportationContract.getTransportationContractorCurrency(carrierContract.payType, carrierContract.currency, true)
 
 		Ext.applyIf(config, {
 			closable: false,
@@ -5057,33 +5102,30 @@ Ext.define('kDesktop.transportation3.transpEdit.ferryPanel', {
 								}),
 								listeners: {
 									select: {
-										fn: function (cmb, rcrd, indx) {
-											this.ferryCarsStore.proxy.extraParams.id = cmb.getValue();
-											this.ferryCarsStore.load();
+										fn: (cmb) => {
+											const selectedCarrierId = cmb.getValue()
 
-											var cmb2 = this.ferryContractCmb;
-											cmb2.enable();
-											cmb2.reset();
-											cmb2.store.removeAll();
-											cmb2.lastQuery = null;
-											cmb2.setValue();
-											this.ferryContractStore.proxy.extraParams.id = cmb.getValue();
-											this.ferryContractStore.load();
-											cmb2.bindStore(this.ferryContractStore);
+											this.ferryCarsStore.proxy.extraParams.id = selectedCarrierId
+											this.ferryCarsStore.load()
 
-											var cmb3 = this.ferryPersonCmb;
-											cmb3.enable();
-											cmb3.reset();
-											cmb3.store.removeAll();
-											cmb3.lastQuery = null;
-											cmb3.setValue();
-											this.ferryPersonStore.proxy.extraParams.id = cmb.getValue();
-											this.ferryPersonStore.load();
-											cmb3.bindStore(this.ferryPersonStore);
+											const cmb2 = this.ferryContractCmb
+											cmb2.enable()
+											cmb2.reset()
+											cmb2.store.removeAll()
+											cmb2.lastQuery = null
+											cmb2.setValue()
+											this.ferryContractStore.proxy.extraParams.id = selectedCarrierId
+											this.ferryContractStore.load()
+											cmb2.bindStore(this.ferryContractStore)
 
-											this.parent.ferryNds();
+											this.parent.ferryNds()
+
+											const carrierPersonCombobox = this.down('personenhancedcombobox')
+											if (!carrierPersonCombobox) return false
+											carrierPersonCombobox.fireEvent('resetAndUpdateStore', {
+												contractorId: selectedCarrierId ? parseInt(selectedCarrierId) : null
+											})
 										},
-										scope: this
 									}
 								}
 							},
@@ -5095,14 +5137,6 @@ Ext.define('kDesktop.transportation3.transpEdit.ferryPanel', {
 								text: "Список машин",
 								scope: this,
 								handler: () => {
-									// this.ferryCarsStore = helpers.ferrycars.createFerryCarsStore(
-									// 	this?.permissions,
-									// 	this.ferryCarsStore?.proxy?.extraParams?.id ?? null
-									// )
-									// this.ferryCarsStore.on('load', function () {
-									// 	this.ferrymancarsBtn.setText("Список машин (" + this.ferryCarsStore.getTotalCount() + ")")
-									// }, this)
-									//
 									Ext.create('ferryCarsListModal', {
 										parent: this,
 										permissions: this?.permissions ?? {},
@@ -5183,18 +5217,13 @@ Ext.define('kDesktop.transportation3.transpEdit.ferryPanel', {
 					items: [
 						...RolesHelper.filterFormFields([
 							{
-								xtype: 'combobox',
+								xtype: 'personenhancedcombobox',
+								initialValue: this.parent?.data?.data?.ferrymanperson ?? null,
+								contractorId: this.parent.data.data.ferryman,
+								actionName: 'ferryPersonStore',
+								tid: this.parent.oid,
 								name: 'ferrymanperson',
-								ref: 'ferryPersonCmb',
-								width: 870,
 								fieldLabel: 'Контактное лицо',
-								labelSeparator: '',
-								labelWidth: 165,
-								queryMode: 'remote',
-								displayField: 'name',
-								valueField: 'id',
-								store: this.ferryPersonStore,
-								editable: false
 							}
 						], this.permissions, RolesHelper.RESOURCE_TRANSPORTATIONS),
 					]
@@ -5361,22 +5390,23 @@ Ext.define('kDesktop.transportation3.transpEdit.ferryPanel', {
 							{
 								xtype: 'container',
 								layout: {type: 'vbox'},
-								height: 100,
+								height: 65,
 								items: [
 									{xtype: 'displayfield', width: 170, value: 'Паспортные данные', alias: 'ferrypassport'},
 									{
 										xtype: 'button',
 										alias: 'ferrypassport',
 										text: 'Копировать',
-										scope: this,
-										handler: function () {
-											this.ownerModule.app.copyToClipboard(
-												this.ferryfiodriverFld.getValue() + ',' +
-												this.ferrypassportFld.getValue() + ',' +
-												this.ferryphoneFld.getValue() + ',' +
-												this.ferrycarFld.getValue() + ' ' + this.ferrycarnumberFld.getValue() + ',' +
-												this.ferrycarppFld.getValue() + ' ' + this.ferrycarppnumberFld.getValue()
-											);
+										handler: () => {
+											const carMake = this.ferrycarFld.getValue() ?? ''
+											const vehiclePlateNumber = this.ferrycarnumberFld.getValue() ?? ''
+											const trailerMake = this.ferrycarppFld.getValue() ?? ''
+											const trailerPlateNumber = this.ferrycarppnumberFld.getValue() ?? ''
+											const driverFullName = this.ferryfiodriverFld.getValue() ?? ''
+											const driverPhone = this.ferryphoneFld.getValue() ?? ''
+											const driverPassport = this.ferrypassportFld.getValue() ?? ''
+											const textToCopy = `${carMake} ${vehiclePlateNumber}, ${trailerMake} ${trailerPlateNumber}\n${driverFullName}, ${driverPhone}\n${driverPassport}`
+											this.ownerModule.app.copyToClipboard(textToCopy)
 										}
 									}
 								]
@@ -5386,7 +5416,7 @@ Ext.define('kDesktop.transportation3.transpEdit.ferryPanel', {
 								name: 'ferrypassport',
 								ref: 'ferrypassportFld',
 								width: 700,
-								height: 100,
+								height: 65,
 								readOnly: true
 							}
 						]
@@ -5406,14 +5436,20 @@ Ext.define('kDesktop.transportation3.transpEdit.ferryPanel', {
 								minValue: 0,
 								decimalPrecision: 2,
 								hideTrigger:true,
+							},
+							{
+								xtype: 'displayfield',
+								width: 135,
+								value: carrierContractCurrencyString,
 								style: {
-									marginRight: '40px'
+									marginLeft: '8px',
+									marginRight: '27px',
 								}
 							},
 							{
 								xtype: 'textfield',
 								name: 'ferryotherchargestarget',
-								width: 540,
+								width: 410,
 								fieldLabel: 'Цель',
 								labelSeparator: '',
 								labelWidth: 100,
@@ -5735,7 +5771,7 @@ Ext.define('kDesktop.transportation3.transpEdit.ferryPanel', {
 						{xtype: 'displayfield', ref: 'ferrySnsFld'}
 					]
 				}
-			]
+			],
 		});
 
 		kDesktop.transportation3.transpEdit.ferryPanel.superclass.constructor.call(this, config);
@@ -6917,9 +6953,7 @@ Ext.define('kDesktop.transportation3.transpEdit.reportPanel', {
 			tbar: this.gridTbar,
 			bbar: this.gridBbar
 		});
-		//this.grid.on('itemdblclick', function(view, rec, item, index, eventObj, options) {
-		//	this.editClient(rec.get('id'), 'edit');
-		//}, this);
+
 		this.grid.on('containercontextmenu', function(view, eventObj){
 			if (this.parent.oid > 0) {
 				var _contextMenu = Ext.create('Ext.menu.Menu', {
@@ -7149,10 +7183,26 @@ Ext.define('kDesktop.transportation3.transpEdit.finePanel', {
 	extend: 'Ext.form.Panel',
 	constructor: function(config) {
 		config = config || {};
-		console.log(JSON.stringify(config, ['ownerModule', 'parent'], 2)); // Выводит только ownerModule и parent с отступами
 		this.ownerModule = config.ownerModule;
 		this.parent = config.parent;
 		this.priv = this.parent.priv;
+
+		const data = this.parent?.data?.data ?? {}
+		const clientContract = {
+			currency: data?.client_currency ?? '',
+			payType: data?.client_contract_pay_type ?? '',
+		}
+		const carrierContract = {
+			currency: data?.ferry_currency ?? '',
+			payType: data?.carrier_contract_pay_type,
+		}
+
+		const TransportationContractHelper = helpers.transportationContract
+		const clientContractCurrencyString =
+			TransportationContractHelper.getTransportationContractorCurrency(clientContract.payType, clientContract.currency)
+		const carrierContractCurrencyString =
+			TransportationContractHelper.getTransportationContractorCurrency(carrierContract.payType, carrierContract.currency)
+
 		Ext.applyIf(config, {
 			closable: false,
 			autoScroll: true,
@@ -7169,7 +7219,15 @@ Ext.define('kDesktop.transportation3.transpEdit.finePanel', {
 							minValue: 0,
 							decimalPrecision: 2,
 							hideTrigger:true
-						}
+						},
+						{
+							xtype: 'displayfield',
+							width: 200,
+							value: clientContractCurrencyString,
+							style: {
+								marginLeft: '12px',
+							}
+						},
 					]
 				},
 				{
@@ -7182,7 +7240,12 @@ Ext.define('kDesktop.transportation3.transpEdit.finePanel', {
 							minValue: 0,
 							decimalPrecision: 2,
 							hideTrigger:true
-						}
+						},
+						{
+							xtype: 'displayfield', width: 200, value: clientContractCurrencyString, style: {
+								marginLeft: '12px',
+							}
+						},
 					]
 				},
 				{
@@ -7193,7 +7256,7 @@ Ext.define('kDesktop.transportation3.transpEdit.finePanel', {
 							name: 'clientfinedesc',
 							width: 670,
 							height: 70
-						}
+						},
 					]
 				},
 				{
@@ -7206,7 +7269,12 @@ Ext.define('kDesktop.transportation3.transpEdit.finePanel', {
 							minValue: 0,
 							decimalPrecision: 2,
 							hideTrigger:true
-						}
+						},
+						{
+							xtype: 'displayfield', width: 200, value: carrierContractCurrencyString, style: {
+								marginLeft: '12px',
+							}
+						},
 					]
 				},
 				{
@@ -7219,7 +7287,12 @@ Ext.define('kDesktop.transportation3.transpEdit.finePanel', {
 							minValue: 0,
 							decimalPrecision: 2,
 							hideTrigger:true
-						}
+						},
+						{
+							xtype: 'displayfield', width: 200, value: carrierContractCurrencyString, style: {
+								marginLeft: '12px',
+							}
+						},
 					]
 				},
 				{
@@ -7822,7 +7895,7 @@ Ext.define('kDesktop.transportation3.transpEdit.surveerPanel.editDocWnd', {
 	}
 });
 
-Ext.define('kDesktop.transportation3.transpEdit.curDiffPanel', {
+Ext.define('kDesktop.transportation3.transpEdit.calcPanel', {
 	extend: 'Ext.panel.Panel',
 	constructor: function(config) {
 		config = config || {};
@@ -7836,33 +7909,15 @@ Ext.define('kDesktop.transportation3.transpEdit.curDiffPanel', {
 			closable: false,
 			layout: 'fit',
 			items: [
-// 				{
-// 					xtype : 'container',
-// 					layout: {
-// 						type: 'hbox'
-// 					},
-// 					items: [
-// 						{
-// 							xtype: 'button',
-// 							text: "Рассчитать",
-// 							handler: function() {
-// 								this.calc();
-// 							},
-// 							scope: this
-// 						},
-// 					]
-// 				},
 				{
 					xtype: 'textarea',
 					ref: 'logArea',
-// 					width: 880,
-// 					height: 730,
 					readOnly: true
 				}
 			]
 		});
 
-		kDesktop.transportation3.transpEdit.curDiffPanel.superclass.constructor.call(this, config);
+		kDesktop.transportation3.transpEdit.calcPanel.superclass.constructor.call(this, config);
 
 		this.ownerModule.app.createReference(this);
 
@@ -7870,24 +7925,19 @@ Ext.define('kDesktop.transportation3.transpEdit.curDiffPanel', {
 			this.calc();
 		}, this);
 	},
-
 	calc: function() {
-		kDesktop.app.doAjax({
-			module: this.ownerModule.moduleId,
-			method: 'getCalculations',
-			id: this.parent.oid
-		},
-		function(res) {
-			this.logArea.setValue(res.log);
-		},
-		this, this);
+		try {
+			kDesktop.app.doAjax({
+					module: this.ownerModule.moduleId,
+					method: 'getCalculations',
+					id: this.parent.oid
+				},
+				function(res) {
+					this.logArea.setValue(res.log);
+				},
+				this);
+		} catch (error) {
+			console.error('Error in calc function:', error);
+		}
 	},
-
-	showMask: function(msg) {
-		this.body.mask(msg + '...', 'x-mask-loading');
-	},
-
-	hideMask: function() {
-		this.body.unmask();
-	}
 });
